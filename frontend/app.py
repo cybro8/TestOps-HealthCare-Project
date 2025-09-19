@@ -100,17 +100,106 @@ def admin_dashboard():
                 st.error(r.text)
 
     elif menu == "Project Configuration":
+
         st.subheader("⚙️ Project Configuration")
 
-        with st.form("project_config_form", clear_on_submit=True):
-            project_name = st.text_input("Project Name")
-            description = st.text_area("Project Description")
-            environment = st.selectbox("Environment", ["Development", "Staging", "Production"])
+        # --- Create New Project ---
 
-            submitted = st.form_submit_button("💾 Save Configuration")
-            if submitted:
-                st.success(f"✅ Configuration saved: {project_name} ({environment})")
-                # Later: POST this to backend
+        with st.expander("➕ Add New Project", expanded=True):
+            with st.form("project_config_form", clear_on_submit=True):
+                project_name = st.text_input("Project Name")
+                description = st.text_area("Project Description")
+                azure_org = st.text_input("Azure Org Name")
+                azure_pat = st.text_input("Azure PAT", type="password")
+                submitted = st.form_submit_button("💾 Save Project")
+                if submitted:
+                    payload = {
+                        "name": project_name,
+                        "description": description,
+                        "organization": azure_org,  # was azure_org
+                        "pat": azure_pat,  # was azure_pat
+                        "iteration_path": "",  # optional, can leave empty
+                        "area_path": "",  # optional, can leave empty
+                        "api_version": "7.0",  # optional, default value
+                    }
+                    r = requests.post(f"{API_URL}/projects", json=payload, headers=headers)
+
+                    if r.status_code in (200, 201):
+                        st.success(f"✅ Project '{project_name}' saved")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Failed to save project: {r.text}")
+
+    # --- List Existing Projects ---
+    st.markdown("### 📋 Existing Projects")
+    r = requests.get(f"{API_URL}/projects", headers=headers)
+    if r.status_code == 200:
+        projects = r.json()
+    else:
+        projects = []
+        st.error("❌ Failed to fetch projects")
+
+    if not projects:
+        st.info("No projects found. Add one above.")
+    else:
+        # Load users once for assignments
+        users = st.session_state.get("users", [])
+        if not users:
+            ur = requests.get(f"{API_URL}/users", headers=headers)
+            if ur.status_code == 200:
+                users = ur.json()
+                st.session_state["users"] = users
+
+        for p in projects:
+            # Use only fields that exist
+            with st.expander(f"📂 {p['name']} — Org: {p.get('organization', '')}", expanded=False):
+                st.caption(p.get("description", ""))
+
+                # --- Show currently assigned users ---
+                assigned_users = []
+                try:
+                    ar = requests.get(f"{API_URL}/projects/{p['id']}/users", headers=headers)
+                    if ar.status_code == 200:
+                        assigned_users = ar.json()
+                except Exception:
+                    pass
+
+                if assigned_users:
+                    st.markdown("👥 **Assigned Users:** " +
+                                ", ".join([u["username"] for u in assigned_users]))
+                else:
+                    st.info("No users assigned yet.")
+
+                # --- Assign / Update Users ---
+                if users:
+                    selected_users = st.multiselect(
+                        "Assign Users",
+                        [u["id"] for u in users],
+                        default=[u["id"] for u in assigned_users] if assigned_users else [],
+                        format_func=lambda uid: next((u["username"] for u in users if u["id"] == uid), str(uid)),
+                        key=f"assign_{p['id']}"
+                    )
+
+                    cols = st.columns([3, 1])
+                    with cols[0]:
+                        if st.button("Update Assignments", key=f"assign_btn_{p['id']}"):
+                            payload = {"user_ids": selected_users}
+                            r = requests.post(f"{API_URL}/projects/{p['id']}/users", json=payload, headers=headers)
+                            if r.status_code == 200:
+                                st.success("✅ Assignments updated")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to update assignments")
+
+                    # --- Delete Project ---
+                    with cols[1]:
+                        if st.button("🗑️ Delete Project", key=f"del_proj_{p['id']}"):
+                            dr = requests.delete(f"{API_URL}/projects/{p['id']}", headers=headers)
+                            if dr.status_code == 200:
+                                st.success(f"🗑️ Project '{p['name']}' deleted")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to delete project")
 
 
 # ---------- User Dashboard (Healthcare Test Case Generator) ----------
