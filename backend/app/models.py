@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, func
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, func, UniqueConstraint
 from sqlalchemy.orm import relationship
 from .db import Base
 
@@ -47,3 +47,8 @@ class ProjectUser(Base):
 
     project = relationship("Project", back_populates="users")
     user = relationship("User", back_populates="projects")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_user_one_project"),
+    )
+

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List  # ensure List is imported
 
 # ------------------ Auth Schemas ------------------
 class Token(BaseModel):
@@ -63,3 +63,9 @@ class ProjectUserOut(ProjectUserCreate):
 
     class Config:
         orm_mode = True
+
+
+# ... existing ProjectUserCreate and ProjectUserOut ...
+
+class ProjectUsersUpdate(BaseModel):
+    user_ids: List[int]

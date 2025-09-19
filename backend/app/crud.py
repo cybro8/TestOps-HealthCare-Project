@@ -53,8 +53,11 @@ def delete_project(db: Session, project_id: int):
     return False
 
 
-# ------------------ Project ↔ User CRUD ------------------
 def assign_user_to_project(db: Session, project_user: schemas.ProjectUserCreate):
+    # Ensure the user is not already assigned to another project
+    existing = db.query(models.ProjectUser).filter(models.ProjectUser.user_id == project_user.user_id).first()
+    if existing:
+        raise ValueError(f"User {project_user.user_id} is already assigned to a project")
     db_project_user = models.ProjectUser(
         project_id=project_user.project_id,
         user_id=project_user.user_id,
@@ -64,6 +67,35 @@ def assign_user_to_project(db: Session, project_user: schemas.ProjectUserCreate)
     db.commit()
     db.refresh(db_project_user)
     return db_project_user
+
+
+# Batch update assignments for a project: replace assignments with provided user_ids
+def update_project_users(db: Session, project_id: int, user_ids: list[int]):
+    # Find users already assigned to other projects
+    conflicts = []
+    for uid in user_ids:
+        q = db.query(models.ProjectUser).filter(models.ProjectUser.user_id == uid).first()
+        if q and q.project_id != project_id:
+            conflicts.append(uid)
+    if conflicts:
+        raise ValueError(f"Users already assigned to other projects: {conflicts}")
+
+    # Remove assignments for this project that are not in the new list
+    existing = db.query(models.ProjectUser).filter(models.ProjectUser.project_id == project_id).all()
+    existing_ids = [e.user_id for e in existing]
+    # delete those not in user_ids
+    for e in existing:
+        if e.user_id not in user_ids:
+            db.delete(e)
+    # add new assignments
+    for uid in user_ids:
+        if uid not in existing_ids:
+            db_project_user = models.ProjectUser(project_id=project_id, user_id=uid)
+            db.add(db_project_user)
+    db.commit()
+    # return current assignments
+    return db.query(models.ProjectUser).filter(models.ProjectUser.project_id == project_id).all()
+
 
 
 def get_project_users(db: Session, project_id: int):

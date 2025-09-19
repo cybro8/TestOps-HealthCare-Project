@@ -161,6 +161,28 @@ def assign_user(project_id: int, project_user: schemas.ProjectUserCreate, db: Se
     return crud.assign_user_to_project(db=db, project_user=project_user)
 
 
+@app.post("/projects/{project_id}/users/assign", response_model=List[schemas.ProjectUserOut])
+def assign_users_batch(
+    project_id: int,
+    payload: schemas.ProjectUsersUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    print("DEBUG received payload:", payload.dict())  # 👈 add this
+    try:
+        assigned = crud.update_project_users(
+            db=db, project_id=project_id, user_ids=payload.user_ids
+        )
+        return assigned
+    except ValueError as ve:
+        print("DEBUG ValueError in assign_users_batch:", ve)  # 👈 add this
+        raise HTTPException(status_code=400, detail=str(ve))
+
+
+
 @app.get("/projects/{project_id}/users", response_model=List[schemas.ProjectUserOut])
 def list_project_users(project_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     return crud.get_project_users(db=db, project_id=project_id)
