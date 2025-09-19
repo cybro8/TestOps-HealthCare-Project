@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:15
+    container_name: auth_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: authdb
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d authdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    container_name: auth_web
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/authdb
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123
+      SECRET_KEY: replace_this_with_a_secure_random_key
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    container_name: auth_frontend
+    restart: always
+    environment:
+      API_URL: http://web:8000
+      GOOGLE_CLOUD_PROJECT: ai-project-467619
+      VERTEX_LOCATION: us-central1
+      GOOGLE_API_KEY: AIzaSyBsd5BbSKn7DPBZ5qgEIA62Nk6OM1meI3U
+    depends_on:
+      web:
+        condition: service_started
+    ports:
+      - "8501:8501"
+
+volumes:
+  db_data:

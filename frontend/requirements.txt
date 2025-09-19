@@ -1,0 +1,12 @@
+# Streamlit frontend
+streamlit
+requests
+
+# Document parsing
+pymupdf        # for PDF extraction (import fitz)
+python-docx    # for DOCX parsing
+pandas
+regex          # better regex support
+
+# Google Gemini (Generative AI)
+google-generativeai
