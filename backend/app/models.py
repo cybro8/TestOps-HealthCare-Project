@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, func, UniqueConstraint
 from sqlalchemy.orm import relationship
 from .db import Base
+from datetime import datetime
 
 
 # ------------------ User Model ------------------
@@ -34,6 +35,7 @@ class Project(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     users = relationship("ProjectUser", back_populates="project")
+    files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
 
 
 # ------------------ Project ↔ User Mapping ------------------
@@ -52,3 +54,13 @@ class ProjectUser(Base):
         UniqueConstraint("user_id", name="uq_user_one_project"),
     )
 
+class ProjectFile(Base):
+    __tablename__ = "project_files"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"))
+    filename = Column(String, nullable=False)
+    filepath = Column(String, nullable=False)  # Path inside db_data
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", back_populates="files")

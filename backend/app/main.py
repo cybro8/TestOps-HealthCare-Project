@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from typing import List
 import os
-
+import shutil
 from . import models, schemas, crud, auth as _auth
 from .db import SessionLocal, engine
 
@@ -11,6 +11,8 @@ from .db import SessionLocal, engine
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="TestOps Project Manager")
+UPLOAD_DIR = "/app/db_data"  # Mounted via docker-compose
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ------------------ Auth Setup ------------------
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -137,12 +139,13 @@ def list_projects(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
     return crud.get_projects(db, skip=skip, limit=limit)
 
 
-@app.get("/projects/{project_id}", response_model=schemas.ProjectOut)
+@app.get("/projects/{project_id}", response_model=schemas.ProjectWithFiles)
 def get_project(project_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     project = crud.get_project(db, project_id=project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
+
 
 
 @app.delete("/projects/{project_id}")
@@ -151,6 +154,38 @@ def delete_project(project_id: int, db: Session = Depends(get_db), current_user:
     if not success:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"detail": "Project deleted successfully"}
+
+@app.post("/projects/{project_id}/upload_file", response_model=schemas.ProjectFileOut)
+async def upload_file(
+    project_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    project = crud.get_project(db, project_id=project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Create project-specific directory inside db_data
+    project_folder = os.path.join(UPLOAD_DIR, f"project_{project_id}")
+    os.makedirs(project_folder, exist_ok=True)
+
+    # Build path and save file
+    file_path = os.path.join(project_folder, file.filename)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # Save file metadata in DB
+    db_file = models.ProjectFile(
+        filename=file.filename,
+        filepath=file_path,
+        project_id=project_id
+    )
+    db.add(db_file)
+    db.commit()
+    db.refresh(db_file)
+
+    return db_file
 
 
 # ------------------ Project ↔ User Routes ------------------

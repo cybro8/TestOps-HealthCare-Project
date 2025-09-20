@@ -1,5 +1,7 @@
 from pydantic import BaseModel
-from typing import Optional, List  # ensure List is imported
+from typing import Optional, List
+from datetime import datetime  # NEW
+
 
 # ------------------ Auth Schemas ------------------
 class Token(BaseModel):
@@ -51,7 +53,6 @@ class ProjectOut(ProjectBase):
         orm_mode = True
 
 
-
 # ------------------ Project ↔ User Schemas ------------------
 class ProjectUserCreate(BaseModel):
     project_id: int
@@ -65,7 +66,24 @@ class ProjectUserOut(ProjectUserCreate):
         orm_mode = True
 
 
-# ... existing ProjectUserCreate and ProjectUserOut ...
-
 class ProjectUsersUpdate(BaseModel):
     user_ids: List[int]
+
+
+# ------------------ Project File Schemas ------------------
+class ProjectFileBase(BaseModel):
+    filename: str
+    filepath: str
+
+
+class ProjectFileOut(ProjectFileBase):
+    id: int
+    uploaded_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+# ------------------ Extended Project Schema with Files ------------------
+class ProjectWithFiles(ProjectOut):
+    files: List[ProjectFileOut] = []

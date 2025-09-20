@@ -20,6 +20,8 @@ services:
     build:
       context: backend
       dockerfile: Dockerfile
+    volumes:
+      - db_data:/app/db_data
     container_name: auth_web
     restart: always
     environment:

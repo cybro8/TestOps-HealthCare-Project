@@ -54,7 +54,6 @@ def delete_project(db: Session, project_id: int):
 
 
 def assign_user_to_project(db: Session, project_user: schemas.ProjectUserCreate):
-    # Ensure the user is not already assigned to another project
     existing = db.query(models.ProjectUser).filter(models.ProjectUser.user_id == project_user.user_id).first()
     if existing:
         raise ValueError(f"User {project_user.user_id} is already assigned to a project")
@@ -69,9 +68,7 @@ def assign_user_to_project(db: Session, project_user: schemas.ProjectUserCreate)
     return db_project_user
 
 
-# Batch update assignments for a project: replace assignments with provided user_ids
 def update_project_users(db: Session, project_id: int, user_ids: list[int]):
-    # Find users already assigned to other projects
     conflicts = []
     for uid in user_ids:
         q = db.query(models.ProjectUser).filter(models.ProjectUser.user_id == uid).first()
@@ -80,22 +77,18 @@ def update_project_users(db: Session, project_id: int, user_ids: list[int]):
     if conflicts:
         raise ValueError(f"Users already assigned to other projects: {conflicts}")
 
-    # Remove assignments for this project that are not in the new list
     existing = db.query(models.ProjectUser).filter(models.ProjectUser.project_id == project_id).all()
     existing_ids = [e.user_id for e in existing]
-    # delete those not in user_ids
+
     for e in existing:
         if e.user_id not in user_ids:
             db.delete(e)
-    # add new assignments
     for uid in user_ids:
         if uid not in existing_ids:
             db_project_user = models.ProjectUser(project_id=project_id, user_id=uid)
             db.add(db_project_user)
     db.commit()
-    # return current assignments
     return db.query(models.ProjectUser).filter(models.ProjectUser.project_id == project_id).all()
-
 
 
 def get_project_users(db: Session, project_id: int):
@@ -113,3 +106,49 @@ def remove_user_from_project(db: Session, project_id: int, user_id: int):
         db.commit()
         return True
     return False
+
+
+# ------------------ ProjectFile CRUD ------------------
+
+def create_project_file(db: Session, project_id: int, filename: str, filepath: str):
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        return None
+    project_file = models.ProjectFile(
+        filename=filename,
+        filepath=filepath,
+        project=project
+    )
+    db.add(project_file)
+    db.commit()
+    db.refresh(project_file)
+    return project_file
+
+
+def get_project_files(db: Session, project_id: int):
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        return []
+    return project.files
+
+
+def delete_project_file(db: Session, file_id: int):
+    file = db.query(models.ProjectFile).filter(models.ProjectFile.id == file_id).first()
+    if not file:
+        return None
+    db.delete(file)
+    db.commit()
+    return file
+
+
+def update_project_file(db: Session, file_id: int, filename: str = None, filepath: str = None):
+    file = db.query(models.ProjectFile).filter(models.ProjectFile.id == file_id).first()
+    if not file:
+        return None
+    if filename:
+        file.filename = filename
+    if filepath:
+        file.filepath = filepath
+    db.commit()
+    db.refresh(file)
+    return file

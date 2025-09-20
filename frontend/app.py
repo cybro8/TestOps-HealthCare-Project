@@ -175,6 +175,80 @@ def admin_dashboard():
         for p in projects:
             with st.expander(f"📂 {p['name']} — Org: {p.get('organization', '')}", expanded=False):
                 st.caption(p.get("description", ""))
+                # --- File Upload Section ---
+                st.markdown("📑 **Compliance Files**")
+
+                if f"uploaded_file_{p['id']}" not in st.session_state:
+                    st.session_state[f"uploaded_file_{p['id']}"] = None
+
+                uploaded_file = st.file_uploader(
+                    f"Upload file for {p['name']}",
+                    type=["pdf", "docx", "md", "txt"],
+                    key=f"file_uploader_{p['id']}"
+                )
+
+                if uploaded_file:
+                    st.session_state[f"uploaded_file_{p['id']}"] = uploaded_file
+
+                if st.session_state[f"uploaded_file_{p['id']}"] is not None:
+                    if st.button("⬆️ Upload", key=f"upload_btn_{p['id']}"):
+                        files = {"file": (
+                            st.session_state[f"uploaded_file_{p['id']}"].name,
+                            st.session_state[f"uploaded_file_{p['id']}"],
+                            st.session_state[f"uploaded_file_{p['id']}"].type
+                        )}
+                        r = requests.post(
+                            f"{API_URL}/projects/{p['id']}/upload_file",
+                            files=files,
+                            headers={"Authorization": f"Bearer {token}"}
+                        )
+                        if r.status_code == 200:
+                            uploaded_file = st.session_state[f"uploaded_file_{p['id']}"]
+                            st.success(f"✅ {uploaded_file.name} uploaded")
+                            st.session_state[f"uploaded_file_{p['id']}"] = None
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Upload failed: {r.text}")
+
+                # List existing files
+                fr = requests.get(f"{API_URL}/projects/{p['id']}", headers={"Authorization": f"Bearer {token}"})
+                if fr.status_code == 200:
+                    project_details = fr.json()
+                    files = project_details.get("files", [])
+                    if files:
+                        st.markdown("### Uploaded Files")
+                        for f in files:
+                            col1, col2, col3 = st.columns([6, 1, 1])
+                            col1.markdown(f"📄 {f['filename']} (uploaded at {f['uploaded_at']})")
+
+                            # Delete file
+                            with col2:
+                                if st.button("🗑️", key=f"del_file_{f['id']}"):
+                                    r_del = requests.delete(
+                                        f"{API_URL}/projects/files/{f['id']}",
+                                        headers={"Authorization": f"Bearer {token}"}
+                                    )
+                                    if r_del.status_code == 200:
+                                        st.success("File deleted")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Failed to delete file")
+
+                            # Download file
+                            with col3:
+                                r_dl = requests.get(
+                                    f"{API_URL}/projects/files/{f['id']}/download",
+                                    headers={"Authorization": f"Bearer {token}"}
+                                )
+                                if r_dl.status_code == 200:
+                                    col3.download_button(
+                                        label="⬇️",
+                                        data=r_dl.content,
+                                        file_name=f['filename']
+                                    )
+                else:
+                    st.info("No files uploaded yet.")
+                # -----------------------------------------------------------------
 
                 # --- Show currently assigned users ---
                 assigned_users = []
