@@ -469,6 +469,49 @@ def user_dashboard():
                                 t[field.strip()] = new_value.strip()
                     else:
                         st.error(f"❌ Failed to update {tcid}: {resp.text}")
+            st.markdown("### 🚀 Deploy Project Test Cases")
+
+            if "deploy_triggered" not in st.session_state:
+                st.session_state.deploy_triggered = False
+
+            if st.button(f"Deploy '{selected_project['name']}' Test Cases"):
+                st.session_state.deploy_triggered = True
+
+            if st.session_state.deploy_triggered:
+                st.session_state.deploy_triggered = False  # reset
+                payload = {
+                    "project_id": selected_project['id'],
+                    "organization": selected_project.get("organization"),
+                    "project_name": selected_project.get("name"),
+                    "pat": selected_project.get("pat"),
+                    "area_path": selected_project.get("name"),
+                    "iteration_path": f"{selected_project.get('name')}\\Sprint 1"
+                }
+
+                try:
+                    deploy_resp = requests.post(
+                        f"{API_URL}/deploy_testcases",
+                        headers={**headers, "Content-Type": "application/json"},
+                        json=payload
+                    )
+
+                    st.write("DEBUG status code:", deploy_resp.status_code)  # debug
+
+                    if deploy_resp.status_code == 200:
+                        results = deploy_resp.json().get("results", [])
+                        if results:
+                            import pandas as pd
+                            df = pd.DataFrame(results)
+                            st.success(f"🚀 Project '{selected_project['name']}' deployed successfully!")
+                            st.markdown("### Deployment Results")
+                            st.dataframe(df)
+                        else:
+                            st.info("✅ Deployment completed, but no results returned.")
+                    else:
+                        st.error(f"❌ Deployment failed: {deploy_resp.text}")
+
+                except Exception as e:
+                    st.error(f"❌ Deployment error: {str(e)}")
 
         # ---------- Show updated test cases after operations ----------
         if st.session_state.testcases:

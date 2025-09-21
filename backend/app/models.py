@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, func, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, func, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 from .db import Base
 from datetime import datetime
@@ -64,3 +64,21 @@ class ProjectFile(Base):
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     project = relationship("Project", back_populates="files")
+
+
+def get_testcase_model(project_id: int):
+    """
+    Returns a SQLAlchemy model class for table testcases_project_<project_id>
+    """
+    table_name = f"testcases_project_{project_id}"
+
+    class TestCase(Base):
+        __tablename__ = table_name
+        __table_args__ = {"extend_existing": True}  # prevent redefinition error
+
+        id = Column(Integer, primary_key=True, index=True)
+        test_case = Column(JSON, nullable=False)
+        created_at = Column(DateTime(timezone=True), server_default=func.now())
+        updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    return TestCase

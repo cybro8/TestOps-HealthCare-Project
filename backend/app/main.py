@@ -2,15 +2,16 @@ from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, B
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import List, Dict
-import os, json
+from typing import List, Dict, Optional
+import os, json ,requests
 import shutil
 from . import models, schemas, crud, auth as _auth
 from .db import SessionLocal, engine, get_db
-
+from requests.auth import HTTPBasicAuth
 # Create tables
 models.Base.metadata.create_all(bind=engine)
-
+from pydantic import BaseModel
+from .models import get_testcase_model
 app = FastAPI(title="TestOps Project Manager")
 UPLOAD_DIR = "/app/db_data"  # Mounted via docker-compose
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -346,3 +347,66 @@ def delete_testcase(
     db.execute(query, {"id": testcase_id})
     db.commit()
     return {"status": "success", "message": "Test case deleted"}
+
+
+# ----------------- Request Schema -----------------
+class DeployRequest(BaseModel):
+    project_id: int
+    organization: str
+    project_name: str
+    pat: str
+    area_path: Optional[str] = None
+    iteration_path: Optional[str] = None
+
+# ----------------- Deploy Endpoint -----------------
+@app.post("/deploy_testcases")
+def deploy_testcases(req: DeployRequest, db: Session = Depends(get_db)):
+    # Get dynamic table model
+    TestCase = get_testcase_model(req.project_id)
+
+    try:
+        testcases = db.query(TestCase).all()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch test cases: {str(e)}")
+
+    if not testcases:
+        raise HTTPException(status_code=404, detail="No test cases found for this project")
+
+    results = []
+
+    for tc in testcases:
+        try:
+            tc_data = tc.test_case if isinstance(tc.test_case, dict) else json.loads(tc.test_case)
+        except Exception as e:
+            print(f"⚠️ Failed to parse test_case ID {tc.id}: {e}")
+            tc_data = {}
+
+        test_case_title = tc_data.get("Test Case ID", f"TC_{tc.id}")
+        test_case_description = tc_data.get("Description", "")
+        test_case_area_path = req.area_path or req.project_name
+        test_case_iteration_path = req.iteration_path or f"{req.project_name}\\Sprint 1"
+
+        url = f"https://dev.azure.com/{req.organization}/{req.project_name}/_apis/wit/workitems/$Test%20Case?api-version=7.0"
+        payload = [
+            {"op": "add", "path": "/fields/System.Title", "value": test_case_title},
+            {"op": "add", "path": "/fields/System.Description", "value": test_case_description},
+            {"op": "add", "path": "/fields/System.AreaPath", "value": test_case_area_path},
+            {"op": "add", "path": "/fields/System.IterationPath", "value": test_case_iteration_path},
+        ]
+        headers = {"Content-Type": "application/json-patch+json"}
+
+        try:
+            response = requests.post(
+                url,
+                auth=HTTPBasicAuth("", req.pat),
+                headers=headers,
+                data=json.dumps(payload)
+            )
+            if response.status_code in (200, 201):
+                results.append({"id": test_case_title, "status": "deployed", "detail": "Successfully deployed"})
+            else:
+                results.append({"id": test_case_title, "status": "failed", "detail": response.text})
+        except Exception as e:
+            results.append({"id": test_case_title, "status": "failed", "detail": str(e)})
+
+    return {"results": results}
