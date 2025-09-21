@@ -3,6 +3,8 @@ from . import models, schemas
 from passlib.context import CryptContext
 from sqlalchemy import text
 from .db import get_db
+from datetime import datetime
+import json
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -155,7 +157,7 @@ def update_project_file(db: Session, file_id: int, filename: str = None, filepat
     db.refresh(file)
     return file
 
-def create_testcases_table(project_id: int, db):
+def create_testcases_table(project_id: int, db: Session):
     table_name = f"testcases_project_{project_id}"
     query = text(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
@@ -166,4 +168,14 @@ def create_testcases_table(project_id: int, db):
         );
     """)
     db.execute(query)
+    db.commit()
+
+
+def insert_testcase(project_id: int, test_case_json: dict, db: Session):
+    table_name = f"testcases_project_{project_id}"
+    query = text(f"""
+        INSERT INTO {table_name} (test_case, created_at, updated_at)
+        VALUES (:test_case, now(), now())
+    """)
+    db.execute(query, {"test_case": json.dumps(test_case_json)})
     db.commit()

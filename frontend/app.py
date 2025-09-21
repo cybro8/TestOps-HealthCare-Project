@@ -330,15 +330,20 @@ def user_dashboard():
         projects = r.json()
         if projects:
             if len(projects) == 1:
-                st.markdown(f"### 🟢 Assigned Project: **{projects[0]['name']}**")
+                selected_project = projects[0]
+                st.markdown(f"### 🟢 Assigned Project: **{selected_project['name']}**")
             else:
                 project_names = [p["name"] for p in projects]
-                selected = st.selectbox("🟢 Select Assigned Project", project_names)
-                st.markdown(f"### Currently Viewing: **{selected}**")
+                selected_name = st.selectbox("🟢 Select Assigned Project", project_names)
+                selected_project = next(p for p in projects if p["name"] == selected_name)
+                st.markdown(f"### Currently Viewing: **{selected_project['name']}**")
         else:
             st.markdown("⚠️ No project assigned to you yet")
+            return
     else:
         st.markdown("❌ Failed to fetch project info")
+        return
+
     uploaded_file = st.file_uploader("Upload a file", type=["pdf", "docx", "md"])
 
     def extract_text(file, ftype):
@@ -442,11 +447,24 @@ def user_dashboard():
                 df = parse_test_cases(response.text)
                 if df is not None and not df.empty:
                     st.table(df)
+
+                    # --- Save each test case JSON to backend ---
+                    for _, row in df.iterrows():
+                        testcase_json = row.to_dict()
+                        resp = requests.post(
+                            f"{API_URL}/projects/{selected_project['id']}/testcases",
+                            json=testcase_json,
+                            headers=headers
+                        )
+                        if resp.status_code == 200:
+                            st.success(f"✅ Test case '{testcase_json.get('Test Case ID')}' saved to DB")
+                        else:
+                            st.error(f"❌ Failed to save test case: {resp.text}")
+
                 else:
                     st.markdown(response.text)
 
             st.session_state.messages.append({"role": "assistant", "content": response.text})
-
 
 # ---------- Main Router ----------
 def main():

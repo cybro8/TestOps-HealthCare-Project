@@ -1,7 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Body
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from typing import List
+from sqlalchemy import text
+from typing import List, Dict
 import os
 import shutil
 from . import models, schemas, crud, auth as _auth
@@ -234,3 +235,46 @@ def get_my_projects(
 ):
     # Return only the projects that the logged-in user is assigned to
     return [pu.project for pu in current_user.projects]
+
+
+@app.get("/projects/{project_id}/testcases")
+def get_testcases(project_id: int, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    current_user = get_current_user(token, db)
+
+    assigned = db.execute(
+        text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
+        {"pid": project_id, "uid": current_user.id}
+    ).fetchone()
+    if not assigned:
+        raise HTTPException(status_code=403, detail="You are not assigned to this project")
+
+    table_name = f"testcases_project_{project_id}"
+    query = text(f"SELECT * FROM {table_name}")
+    result = db.execute(query).fetchall()
+    return [{"id": r.id, "test_case": r.test_case, "created_at": r.created_at} for r in result]
+
+@app.post("/projects/{project_id}/testcases")
+def save_testcase(
+    project_id: int,
+    testcase: dict = Body(...),  # <--- tell FastAPI to parse JSON body
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+):
+    current_user = get_current_user(token, db)
+
+    # Check if user is assigned to this project
+    assigned = db.execute(
+        text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
+        {"pid": project_id, "uid": current_user.id}
+    ).fetchone()
+
+    if not assigned:
+        raise HTTPException(status_code=403, detail="You are not assigned to this project")
+
+    # Ensure table exists
+    crud.create_testcases_table(project_id, db)
+
+    # Insert the test case JSON
+    crud.insert_testcase(project_id, testcase, db)
+
+    return {"status": "success", "message": "Test case saved"}
