@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import List, Dict
-import os
+import os, json
 import shutil
 from . import models, schemas, crud, auth as _auth
 from .db import SessionLocal, engine, get_db
@@ -253,6 +253,24 @@ def get_testcases(project_id: int, db: Session = Depends(get_db), token: str = D
     result = db.execute(query).fetchall()
     return [{"id": r.id, "test_case": r.test_case, "created_at": r.created_at} for r in result]
 
+@app.get("/projects/{project_id}/testcases/{testcase_id}")
+def get_testcase(project_id: int, testcase_id: int, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    current_user = get_current_user(token, db)
+    assigned = db.execute(
+        text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
+        {"pid": project_id, "uid": current_user.id}
+    ).fetchone()
+    if not assigned:
+        raise HTTPException(status_code=403, detail="You are not assigned to this project")
+
+    table_name = f"testcases_project_{project_id}"
+    query = text(f"SELECT * FROM {table_name} WHERE id = :id")
+    row = db.execute(query, {"id": testcase_id}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Test case not found")
+    return {"id": row.id, "test_case": row.test_case, "created_at": row.created_at, "updated_at": row.updated_at}
+
+
 @app.post("/projects/{project_id}/testcases")
 def save_testcase(
     project_id: int,
@@ -278,3 +296,53 @@ def save_testcase(
     crud.insert_testcase(project_id, testcase, db)
 
     return {"status": "success", "message": "Test case saved"}
+
+@app.put("/projects/{project_id}/testcases/{testcase_id}")
+def update_testcase(
+    project_id: int,
+    testcase_id: int,
+    testcase: dict = Body(...),
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+):
+    current_user = get_current_user(token, db)
+
+    assigned = db.execute(
+        text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
+        {"pid": project_id, "uid": current_user.id}
+    ).fetchone()
+    if not assigned:
+        raise HTTPException(status_code=403, detail="You are not assigned to this project")
+
+    table_name = f"testcases_project_{project_id}"
+    query = text(f"""
+        UPDATE {table_name}
+        SET test_case = :test_case, updated_at = now()
+        WHERE id = :id
+    """)
+    db.execute(query, {"test_case": json.dumps(testcase), "id": testcase_id})
+    db.commit()
+    return {"status": "success", "message": "Test case updated"}
+
+
+@app.delete("/projects/{project_id}/testcases/{testcase_id}")
+def delete_testcase(
+    project_id: int,
+    testcase_id: int,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+):
+    current_user = get_current_user(token, db)
+
+    assigned = db.execute(
+        text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
+        {"pid": project_id, "uid": current_user.id}
+    ).fetchone()
+    if not assigned:
+        raise HTTPException(status_code=403, detail="You are not assigned to this project")
+
+    table_name = f"testcases_project_{project_id}"
+    query = text(f"DELETE FROM {table_name} WHERE id = :id")
+    db.execute(query, {"id": testcase_id})
+    db.commit()
+    return {"status": "success", "message": "Test case deleted"}

@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-import os
+import os ,json
 
 # ---------- Backend API ----------
 API_URL = os.getenv("API_URL", "http://localhost:8000")
@@ -318,32 +318,32 @@ def user_dashboard():
     import re
     from config import GENAI_API_KEY
 
-    # Setup Gemini with API Key
     genai.configure(api_key=GENAI_API_KEY)
     model = genai.GenerativeModel("gemini-1.5-flash")
 
     st.title("🏥 Healthcare Test Case Generator")
     headers = {"Authorization": f"Bearer {st.session_state['token']}"}
-    r = requests.get(f"{API_URL}/users/me/projects", headers=headers)
 
-    if r.status_code == 200:
-        projects = r.json()
-        if projects:
-            if len(projects) == 1:
-                selected_project = projects[0]
-                st.markdown(f"### 🟢 Assigned Project: **{selected_project['name']}**")
-            else:
-                project_names = [p["name"] for p in projects]
-                selected_name = st.selectbox("🟢 Select Assigned Project", project_names)
-                selected_project = next(p for p in projects if p["name"] == selected_name)
-                st.markdown(f"### Currently Viewing: **{selected_project['name']}**")
-        else:
-            st.markdown("⚠️ No project assigned to you yet")
-            return
-    else:
+    # ---------- Fetch Assigned Project ----------
+    r = requests.get(f"{API_URL}/users/me/projects", headers=headers)
+    if r.status_code != 200:
         st.markdown("❌ Failed to fetch project info")
         return
 
+    projects = r.json()
+    if not projects:
+        st.markdown("⚠️ No project assigned")
+        return
+
+    if len(projects) == 1:
+        selected_project = projects[0]
+        st.markdown(f"### 🟢 Assigned Project: **{selected_project['name']}**")
+    else:
+        selected_name = st.selectbox("🟢 Select Assigned Project", [p["name"] for p in projects])
+        selected_project = next(p for p in projects if p["name"] == selected_name)
+        st.markdown(f"### Currently Viewing: **{selected_project['name']}**")
+
+    # ---------- File Upload ----------
     uploaded_file = st.file_uploader("Upload a file", type=["pdf", "docx", "md"])
 
     def extract_text(file, ftype):
@@ -375,13 +375,46 @@ def user_dashboard():
         if not matches:
             return None
         return pd.DataFrame([{
-            "Test Case ID": m[0].strip(),
-            "Description": m[1].strip(),
-            "Steps": m[2].strip(),
-            "Expected Result": m[3].strip(),
-            "Priority": m[4].strip()
+            "test_case_id": m[0].strip(),
+            "description": m[1].strip(),
+            "steps": m[2].strip(),
+            "expected_result": m[3].strip(),
+            "priority": m[4].strip()
         } for m in matches])
 
+    # ---------- Load Existing Test Cases ----------
+    r2 = requests.get(f"{API_URL}/projects/{selected_project['id']}/testcases", headers=headers)
+    testcases = r2.json() if r2.status_code == 200 else []
+
+    if testcases:
+        st.markdown("### 📋 Existing Test Cases")
+
+        # Extract dict from 'test_case' field
+        extracted = []
+        for tc in testcases:
+            tc_data = tc.get("test_case", {})  # already a dict
+            if tc_data:
+                tc_data["id"] = tc.get("id")  # keep DB id for update/delete
+                extracted.append(tc_data)
+
+        if extracted:
+            df = pd.DataFrame(extracted)
+            # Select and rename columns
+            display_df = df[["Test Case ID", "Description", "Steps", "Expected Result", "Priority", "id"]]
+            display_df = display_df.rename(columns={
+                "Test Case ID": "test_case_id",
+                "Description": "description",
+                "Steps": "steps",
+                "Expected Result": "expected_result",
+                "Priority": "priority"
+            })
+            st.dataframe(display_df)
+        else:
+            st.markdown("⚠️ No valid test cases found")
+    else:
+        st.markdown("⚠️ No test cases found for this project")
+
+    # ---------- AI Chat Input ----------
     if prompt := st.chat_input("Ask me something..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -393,7 +426,8 @@ def user_dashboard():
         if normalized_prompt in greetings:
             intro_message = (
                 "👋 Hi! I am a **Test Case Generator for Healthcare Applications**. "
-                "Upload requirements (PDF, DOCX, or Markdown), and I’ll generate structured test cases."
+                "Upload requirements (PDF, DOCX, or Markdown), and I’ll generate structured test cases. "
+                "You can also type commands like 'delete TC001' or 'modify TC002 description to ...'."
             )
             with st.chat_message("assistant"):
                 st.markdown(intro_message)
@@ -409,62 +443,86 @@ def user_dashboard():
             st.session_state.messages.append({"role": "assistant", "content": restricted_reply})
 
         else:
-            if "doc_content" in st.session_state:
-                full_prompt = f"""
-                You are an AI specialized in generating **structured test cases for Healthcare Applications**.
-                Generate test cases in the following format exactly:
+            # ---------- Handle AI Operations ----------
+            instructions_prompt = f"""
+            You are an AI assistant. The user has the following test cases:
+            {pd.DataFrame(st.session_state.testcases).to_dict(orient='records')}
+            User Instruction: "{prompt}"
+            Respond ONLY with structured commands in the format:
+            DELETE:<test_case_id>
+            MODIFY:<test_case_id>|<field>|<new_value>
+            """
 
-                Test Case ID:
-                Description:
-                Steps:
-                Expected Result:
-                Priority:
+            response = model.generate_content(instructions_prompt)
 
-                Use the following document content to create test cases:
+            for instr in response.text.splitlines():
+                instr = instr.strip()
+                if instr.startswith("DELETE:"):
+                    tcid = instr.replace("DELETE:", "").strip()
+                    resp = requests.delete(
+                        f"{API_URL}/projects/{selected_project['id']}/testcases/{tcid}",
+                        headers=headers
+                    )
+                    if resp.status_code == 200:
+                        st.success(f"✅ Test case {tcid} deleted")
+                        st.session_state.testcases = [t for t in st.session_state.testcases if str(t['id']) != str(tcid)]
+                    else:
+                        st.error(f"❌ Failed to delete {tcid}: {resp.text}")
 
-                {st.session_state['doc_content'][:20000]}
-
-                User Query: {prompt}
-                """
-            else:
-                full_prompt = f"""
-                You are an AI specialized in generating **structured test cases for Healthcare Applications**.
-                Generate test cases in the following format exactly:
-
-                Test Case ID:
-                Description:
-                Steps:
-                Expected Result:
-                Priority:
-
-                User Query: {prompt}
-                """
-
-            with st.chat_message("assistant"):
-                with st.spinner("🤖 Generating structured test cases..."):
-                    response = model.generate_content(full_prompt)
-
-                df = parse_test_cases(response.text)
-                if df is not None and not df.empty:
-                    st.table(df)
-
-                    # --- Save each test case JSON to backend ---
-                    for _, row in df.iterrows():
-                        testcase_json = row.to_dict()
-                        resp = requests.post(
-                            f"{API_URL}/projects/{selected_project['id']}/testcases",
-                            json=testcase_json,
+                elif instr.startswith("MODIFY:"):
+                    parts = instr.replace("MODIFY:", "").split("|")
+                    if len(parts) == 3:
+                        tcid, field, new_value = parts
+                        resp = requests.put(
+                            f"{API_URL}/projects/{selected_project['id']}/testcases/{tcid.strip()}",
+                            json={field.strip(): new_value.strip()},
                             headers=headers
                         )
                         if resp.status_code == 200:
-                            st.success(f"✅ Test case '{testcase_json.get('Test Case ID')}' saved to DB")
+                            st.success(f"✅ Test case {tcid} updated")
+                            for t in st.session_state.testcases:
+                                if str(t["id"]) == str(tcid.strip()):
+                                    t[field.strip()] = new_value.strip()
                         else:
-                            st.error(f"❌ Failed to save test case: {resp.text}")
+                            st.error(f"❌ Failed to update {tcid}: {resp.text}")
 
-                else:
-                    st.markdown(response.text)
+            # ---------- Generate Test Cases from Uploaded File ----------
+            if "doc_content" in st.session_state and any(x in normalized_prompt for x in ["generate", "create"]):
+                full_prompt = f"""
+                You are an AI specialized in generating structured test cases for Healthcare Applications.
+                Generate test cases in the format:
+                Test Case ID:
+                Description:
+                Steps:
+                Expected Result:
+                Priority:
+
+                Document Content: {st.session_state['doc_content'][:20000]}
+                User Query: {prompt}
+                """
+                with st.chat_message("assistant"):
+                    with st.spinner("🤖 Generating structured test cases..."):
+                        gen_response = model.generate_content(full_prompt)
+
+                    df = parse_test_cases(gen_response.text)
+                    if df is not None and not df.empty:
+                        st.table(df)
+                        for _, row in df.iterrows():
+                            testcase_json = row.to_dict()
+                            resp = requests.post(
+                                f"{API_URL}/projects/{selected_project['id']}/testcases",
+                                json=testcase_json,
+                                headers=headers
+                            )
+                            if resp.status_code == 200:
+                                st.success(f"✅ Test case '{testcase_json.get('test_case_id')}' saved to DB")
+                            else:
+                                st.error(f"❌ Failed to save test case: {resp.text}")
 
             st.session_state.messages.append({"role": "assistant", "content": response.text})
+            with st.chat_message("assistant"):
+                st.markdown(response.text)
+
 
 # ---------- Main Router ----------
 def main():
