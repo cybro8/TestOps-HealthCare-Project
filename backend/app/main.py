@@ -5,7 +5,7 @@ from typing import List
 import os
 import shutil
 from . import models, schemas, crud, auth as _auth
-from .db import SessionLocal, engine
+from .db import SessionLocal, engine, get_db
 
 # Create tables
 models.Base.metadata.create_all(bind=engine)
@@ -17,12 +17,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # ------------------ Auth Setup ------------------
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
 
 
 # Ensure admin user exists on startup
@@ -129,9 +124,11 @@ def delete_user(user_id: int, current_user: models.User = Depends(get_current_us
     db_sess.commit()
     return {"detail": "User deleted"}
 # ------------------ Project Routes ------------------
-@app.post("/projects/", response_model=schemas.ProjectOut)
-def create_project(project: schemas.ProjectCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.create_project(db=db, project=project)
+@app.post("/projects", response_model=schemas.ProjectOut)   # <-- use ProjectOut
+def create_project(project: schemas.ProjectCreate, db: Session = Depends(get_db)):
+    db_project = crud.create_project(db=db, project=project)
+    crud.create_testcases_table(db_project.id, db)
+    return db_project
 
 
 @app.get("/projects/", response_model=List[schemas.ProjectOut])
@@ -229,3 +226,11 @@ def remove_user(project_id: int, user_id: int, db: Session = Depends(get_db), cu
     if not success:
         raise HTTPException(status_code=404, detail="User not assigned to this project")
     return {"detail": "User removed from project"}
+
+@app.get("/users/me/projects", response_model=List[schemas.ProjectOut])
+def get_my_projects(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Return only the projects that the logged-in user is assigned to
+    return [pu.project for pu in current_user.projects]

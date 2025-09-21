@@ -158,7 +158,7 @@ def admin_dashboard():
 
     # --- List Existing Projects ---
     st.markdown("### 📋 Existing Projects")
-    r = requests.get(f"{API_URL}/projects", headers=headers)
+    r = requests.get(f"{API_URL}/projects/", headers=headers)
     if r.status_code == 200:
         projects = r.json()
     else:
@@ -323,7 +323,22 @@ def user_dashboard():
     model = genai.GenerativeModel("gemini-1.5-flash")
 
     st.title("🏥 Healthcare Test Case Generator")
+    headers = {"Authorization": f"Bearer {st.session_state['token']}"}
+    r = requests.get(f"{API_URL}/users/me/projects", headers=headers)
 
+    if r.status_code == 200:
+        projects = r.json()
+        if projects:
+            if len(projects) == 1:
+                st.markdown(f"### 🟢 Assigned Project: **{projects[0]['name']}**")
+            else:
+                project_names = [p["name"] for p in projects]
+                selected = st.selectbox("🟢 Select Assigned Project", project_names)
+                st.markdown(f"### Currently Viewing: **{selected}**")
+        else:
+            st.markdown("⚠️ No project assigned to you yet")
+    else:
+        st.markdown("❌ Failed to fetch project info")
     uploaded_file = st.file_uploader("Upload a file", type=["pdf", "docx", "md"])
 
     def extract_text(file, ftype):

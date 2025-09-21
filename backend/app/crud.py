@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
 from . import models, schemas
 from passlib.context import CryptContext
+from sqlalchemy import text
+from .db import get_db
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -152,3 +154,16 @@ def update_project_file(db: Session, file_id: int, filename: str = None, filepat
     db.commit()
     db.refresh(file)
     return file
+
+def create_testcases_table(project_id: int, db):
+    table_name = f"testcases_project_{project_id}"
+    query = text(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            id SERIAL PRIMARY KEY,
+            test_case JSONB NOT NULL,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        );
+    """)
+    db.execute(query)
+    db.commit()
