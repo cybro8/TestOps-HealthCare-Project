@@ -324,6 +324,16 @@ def user_dashboard():
     st.title("🏥 Healthcare Test Case Generator")
     headers = {"Authorization": f"Bearer {st.session_state['token']}"}
 
+    # ---------- Initialize session state ----------
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    if "testcases" not in st.session_state:
+        st.session_state.testcases = []
+
+    if "doc_content" not in st.session_state:
+        st.session_state.doc_content = None
+
     # ---------- Fetch Assigned Project ----------
     r = requests.get(f"{API_URL}/users/me/projects", headers=headers)
     if r.status_code != 200:
@@ -359,60 +369,41 @@ def user_dashboard():
 
     if uploaded_file:
         ftype = uploaded_file.name.split(".")[-1].lower()
-        st.session_state["doc_content"] = extract_text(uploaded_file, ftype)
+        st.session_state.doc_content = extract_text(uploaded_file, ftype)
         st.success(f"✅ {uploaded_file.name} uploaded and processed!")
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    def parse_test_cases(response_text):
-        pattern = r"Test Case ID:(.*?)\nDescription:(.*?)\nSteps:(.*?)\nExpected Result:(.*?)\nPriority:(.*?)\n"
-        matches = re.findall(pattern, response_text, re.DOTALL | re.IGNORECASE)
-        if not matches:
-            return None
-        return pd.DataFrame([{
-            "test_case_id": m[0].strip(),
-            "description": m[1].strip(),
-            "steps": m[2].strip(),
-            "expected_result": m[3].strip(),
-            "priority": m[4].strip()
-        } for m in matches])
 
     # ---------- Load Existing Test Cases ----------
     r2 = requests.get(f"{API_URL}/projects/{selected_project['id']}/testcases", headers=headers)
-    testcases = r2.json() if r2.status_code == 200 else []
-
-    if testcases:
-        st.markdown("### 📋 Existing Test Cases")
-
-        # Extract dict from 'test_case' field
-        extracted = []
-        for tc in testcases:
-            tc_data = tc.get("test_case", {})  # already a dict
+    if r2.status_code == 200:
+        fetched = r2.json()
+        st.session_state.testcases = []
+        for tc in fetched:
+            tc_data = tc.get("test_case", {})
             if tc_data:
-                tc_data["id"] = tc.get("id")  # keep DB id for update/delete
-                extracted.append(tc_data)
+                tc_data["id"] = tc.get("id")  # DB ID
+                st.session_state.testcases.append(tc_data)
+    else:
+        st.session_state.testcases = []
 
-        if extracted:
-            df = pd.DataFrame(extracted)
-            # Select and rename columns
-            display_df = df[["Test Case ID", "Description", "Steps", "Expected Result", "Priority", "id"]]
-            display_df = display_df.rename(columns={
-                "Test Case ID": "test_case_id",
-                "Description": "description",
-                "Steps": "steps",
-                "Expected Result": "expected_result",
-                "Priority": "priority"
-            })
-            st.dataframe(display_df)
-        else:
-            st.markdown("⚠️ No valid test cases found")
+    # Display existing test cases
+    if st.session_state.testcases:
+        st.markdown("### 📋 Existing Test Cases")
+        df = pd.DataFrame(st.session_state.testcases)
+        display_df = df[["Test Case ID", "Description", "Steps", "Expected Result", "Priority", "id"]].rename(columns={
+            "Test Case ID": "test_case_id",
+            "Description": "description",
+            "Steps": "steps",
+            "Expected Result": "expected_result",
+            "Priority": "priority"
+        })
+        st.dataframe(display_df)
     else:
         st.markdown("⚠️ No test cases found for this project")
+
+    # ---------- Display Chat Messages ----------
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
     # ---------- AI Chat Input ----------
     if prompt := st.chat_input("Ask me something..."):
@@ -432,97 +423,118 @@ def user_dashboard():
             with st.chat_message("assistant"):
                 st.markdown(intro_message)
             st.session_state.messages.append({"role": "assistant", "content": intro_message})
+            return
 
-        elif "test case" not in normalized_prompt and "healthcare" not in normalized_prompt:
-            restricted_reply = (
-                "⚠️ I am a **Test Case Generator for Healthcare Applications**. "
-                "I cannot answer questions outside this domain."
-            )
-            with st.chat_message("assistant"):
-                st.markdown(restricted_reply)
-            st.session_state.messages.append({"role": "assistant", "content": restricted_reply})
+        # ---------- Handle AI Operations ----------
+        instructions_prompt = f"""
+        You are an AI assistant. The user has the following test cases:
+        {pd.DataFrame(st.session_state.testcases).to_dict(orient='records')}
+        User Instruction: "{prompt}"
+        Respond ONLY with structured commands in the format:
+        DELETE:<id>
+        MODIFY:<id>|<field>|<new_value>
+        """
 
-        else:
-            # ---------- Handle AI Operations ----------
-            instructions_prompt = f"""
-            You are an AI assistant. The user has the following test cases:
-            {pd.DataFrame(st.session_state.testcases).to_dict(orient='records')}
-            User Instruction: "{prompt}"
-            Respond ONLY with structured commands in the format:
-            DELETE:<test_case_id>
-            MODIFY:<test_case_id>|<field>|<new_value>
-            """
+        response = model.generate_content(instructions_prompt)
 
-            response = model.generate_content(instructions_prompt)
+        for instr in response.text.splitlines():
+            instr = instr.strip()
+            if instr.startswith("DELETE:"):
+                tcid = instr.replace("DELETE:", "").strip()
+                resp = requests.delete(
+                    f"{API_URL}/projects/{selected_project['id']}/testcases/{tcid}",
+                    headers=headers
+                )
+                if resp.status_code == 200:
+                    st.success(f"✅ Test case {tcid} deleted")
+                    # Update session state
+                    st.session_state.testcases = [t for t in st.session_state.testcases if str(t['id']) != str(tcid)]
+                else:
+                    st.error(f"❌ Failed to delete {tcid}: {resp.text}")
 
-            for instr in response.text.splitlines():
-                instr = instr.strip()
-                if instr.startswith("DELETE:"):
-                    tcid = instr.replace("DELETE:", "").strip()
-                    resp = requests.delete(
-                        f"{API_URL}/projects/{selected_project['id']}/testcases/{tcid}",
+            elif instr.startswith("MODIFY:"):
+                parts = instr.replace("MODIFY:", "").split("|")
+                if len(parts) == 3:
+                    tcid, field, new_value = parts
+                    resp = requests.put(
+                        f"{API_URL}/projects/{selected_project['id']}/testcases/{tcid.strip()}",
+                        json={field.strip(): new_value.strip()},
                         headers=headers
                     )
                     if resp.status_code == 200:
-                        st.success(f"✅ Test case {tcid} deleted")
-                        st.session_state.testcases = [t for t in st.session_state.testcases if str(t['id']) != str(tcid)]
+                        st.success(f"✅ Test case {tcid} updated")
+                        # Update session state
+                        for t in st.session_state.testcases:
+                            if str(t["id"]) == str(tcid.strip()):
+                                t[field.strip()] = new_value.strip()
                     else:
-                        st.error(f"❌ Failed to delete {tcid}: {resp.text}")
+                        st.error(f"❌ Failed to update {tcid}: {resp.text}")
 
-                elif instr.startswith("MODIFY:"):
-                    parts = instr.replace("MODIFY:", "").split("|")
-                    if len(parts) == 3:
-                        tcid, field, new_value = parts
-                        resp = requests.put(
-                            f"{API_URL}/projects/{selected_project['id']}/testcases/{tcid.strip()}",
-                            json={field.strip(): new_value.strip()},
+        # ---------- Show updated test cases after operations ----------
+        if st.session_state.testcases:
+            st.markdown("### 📋 Updated Test Cases")
+            df = pd.DataFrame(st.session_state.testcases)
+            display_df = df[["Test Case ID", "Description", "Steps", "Expected Result", "Priority", "id"]].rename(
+                columns={
+                    "Test Case ID": "test_case_id",
+                    "Description": "description",
+                    "Steps": "steps",
+                    "Expected Result": "expected_result",
+                    "Priority": "priority"
+                })
+            st.dataframe(display_df)
+        else:
+            st.markdown("⚠️ No test cases remaining after this operation")
+
+        # ---------- Generate Test Cases from Uploaded File ----------
+        if "doc_content" in st.session_state and any(x in normalized_prompt for x in ["generate", "create"]):
+            full_prompt = f"""
+            You are an AI specialized in generating structured test cases for Healthcare Applications.
+            Generate test cases in the format:
+            Test Case ID:
+            Description:
+            Steps:
+            Expected Result:
+            Priority:
+
+            Document Content: {st.session_state['doc_content'][:20000]}
+            User Query: {prompt}
+            """
+            with st.chat_message("assistant"):
+                with st.spinner("🤖 Generating structured test cases..."):
+                    gen_response = model.generate_content(full_prompt)
+
+                def parse_test_cases(response_text):
+                    pattern = r"Test Case ID:(.*?)\nDescription:(.*?)\nSteps:(.*?)\nExpected Result:(.*?)\nPriority:(.*?)\n"
+                    matches = re.findall(pattern, response_text, re.DOTALL | re.IGNORECASE)
+                    if not matches:
+                        return None
+                    return pd.DataFrame([{
+                        "Test Case ID": m[0].strip(),
+                        "Description": m[1].strip(),
+                        "Steps": m[2].strip(),
+                        "Expected Result": m[3].strip(),
+                        "Priority": m[4].strip()
+                    } for m in matches])
+
+                df = parse_test_cases(gen_response.text)
+                if df is not None and not df.empty:
+                    st.table(df)
+                    for _, row in df.iterrows():
+                        testcase_json = row.to_dict()
+                        resp = requests.post(
+                            f"{API_URL}/projects/{selected_project['id']}/testcases",
+                            json=testcase_json,
                             headers=headers
                         )
                         if resp.status_code == 200:
-                            st.success(f"✅ Test case {tcid} updated")
-                            for t in st.session_state.testcases:
-                                if str(t["id"]) == str(tcid.strip()):
-                                    t[field.strip()] = new_value.strip()
+                            st.success(f"✅ Test case '{testcase_json.get('Test Case ID')}' saved to DB")
                         else:
-                            st.error(f"❌ Failed to update {tcid}: {resp.text}")
+                            st.error(f"❌ Failed to save test case: {resp.text}")
 
-            # ---------- Generate Test Cases from Uploaded File ----------
-            if "doc_content" in st.session_state and any(x in normalized_prompt for x in ["generate", "create"]):
-                full_prompt = f"""
-                You are an AI specialized in generating structured test cases for Healthcare Applications.
-                Generate test cases in the format:
-                Test Case ID:
-                Description:
-                Steps:
-                Expected Result:
-                Priority:
-
-                Document Content: {st.session_state['doc_content'][:20000]}
-                User Query: {prompt}
-                """
-                with st.chat_message("assistant"):
-                    with st.spinner("🤖 Generating structured test cases..."):
-                        gen_response = model.generate_content(full_prompt)
-
-                    df = parse_test_cases(gen_response.text)
-                    if df is not None and not df.empty:
-                        st.table(df)
-                        for _, row in df.iterrows():
-                            testcase_json = row.to_dict()
-                            resp = requests.post(
-                                f"{API_URL}/projects/{selected_project['id']}/testcases",
-                                json=testcase_json,
-                                headers=headers
-                            )
-                            if resp.status_code == 200:
-                                st.success(f"✅ Test case '{testcase_json.get('test_case_id')}' saved to DB")
-                            else:
-                                st.error(f"❌ Failed to save test case: {resp.text}")
-
-            st.session_state.messages.append({"role": "assistant", "content": response.text})
+            st.session_state.messages.append({"role": "assistant", "content": gen_response.text})
             with st.chat_message("assistant"):
-                st.markdown(response.text)
-
+                st.markdown(gen_response.text)
 
 # ---------- Main Router ----------
 def main():
