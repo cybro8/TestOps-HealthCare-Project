@@ -30,23 +30,21 @@ class Project(Base):
     area_path = Column(String(300), nullable=True)                # Area Path
     api_version = Column(String(20), default="7.0")               # API Version
     description = Column(Text, nullable=True)
-
+    chat_history = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
-
     users = relationship("ProjectUser", back_populates="project")
     files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
+    test_cases = relationship("TestCase", back_populates="project", cascade="all, delete-orphan")
 
 
 # ------------------ Project ↔ User Mapping ------------------
 class ProjectUser(Base):
     __tablename__ = "project_users"
-
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"))
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
     role = Column(String(50), default="member")  # admin / contributor / reader
-
     project = relationship("Project", back_populates="users")
     user = relationship("User", back_populates="projects")
 
@@ -65,20 +63,16 @@ class ProjectFile(Base):
 
     project = relationship("Project", back_populates="files")
 
-
-def get_testcase_model(project_id: int):
+class TestCase(Base):
     """
-    Returns a SQLAlchemy model class for table testcases_project_<project_id>
+    Stores a single test case, linked to a project.
     """
-    table_name = f"testcases_project_{project_id}"
+    __tablename__ = "testcases"
 
-    class TestCase(Base):
-        __tablename__ = table_name
-        __table_args__ = {"extend_existing": True}  # prevent redefinition error
+    id = Column(Integer, primary_key=True, index=True)
+    test_case = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-        id = Column(Integer, primary_key=True, index=True)
-        test_case = Column(JSON, nullable=False)
-        created_at = Column(DateTime(timezone=True), server_default=func.now())
-        updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    return TestCase
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"))
+    project = relationship("Project", back_populates="test_cases")

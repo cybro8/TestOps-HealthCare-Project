@@ -11,7 +11,6 @@ from requests.auth import HTTPBasicAuth
 # Create tables
 models.Base.metadata.create_all(bind=engine)
 from pydantic import BaseModel
-from .models import get_testcase_model
 app = FastAPI(title="TestOps Project Manager")
 UPLOAD_DIR = "/app/db_data"  # Mounted via docker-compose
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -129,7 +128,6 @@ def delete_user(user_id: int, current_user: models.User = Depends(get_current_us
 @app.post("/projects", response_model=schemas.ProjectOut)   # <-- use ProjectOut
 def create_project(project: schemas.ProjectCreate, db: Session = Depends(get_db)):
     db_project = crud.create_project(db=db, project=project)
-    crud.create_testcases_table(db_project.id, db)
     return db_project
 
 
@@ -238,10 +236,12 @@ def get_my_projects(
     return [pu.project for pu in current_user.projects]
 
 
-@app.get("/projects/{project_id}/testcases")
-def get_testcases(project_id: int, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    current_user = get_current_user(token, db)
-
+@app.get("/projects/{project_id}/testcases", response_model=List[schemas.TestCaseOut])
+def get_testcases(
+    project_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
     assigned = db.execute(
         text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
         {"pid": project_id, "uid": current_user.id}
@@ -249,14 +249,16 @@ def get_testcases(project_id: int, db: Session = Depends(get_db), token: str = D
     if not assigned:
         raise HTTPException(status_code=403, detail="You are not assigned to this project")
 
-    table_name = f"testcases_project_{project_id}"
-    query = text(f"SELECT * FROM {table_name}")
-    result = db.execute(query).fetchall()
-    return [{"id": r.id, "test_case": r.test_case, "created_at": r.created_at} for r in result]
+    testcases = crud.get_testcases_by_project(db, project_id=project_id)
+    return testcases
 
-@app.get("/projects/{project_id}/testcases/{testcase_id}")
-def get_testcase(project_id: int, testcase_id: int, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    current_user = get_current_user(token, db)
+@app.get("/projects/{project_id}/testcases/{testcase_id}", response_model=schemas.TestCaseOut)
+def get_testcase(
+    project_id: int, 
+    testcase_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
     assigned = db.execute(
         text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
         {"pid": project_id, "uid": current_user.id}
@@ -264,24 +266,24 @@ def get_testcase(project_id: int, testcase_id: int, db: Session = Depends(get_db
     if not assigned:
         raise HTTPException(status_code=403, detail="You are not assigned to this project")
 
-    table_name = f"testcases_project_{project_id}"
-    query = text(f"SELECT * FROM {table_name} WHERE id = :id")
-    row = db.execute(query, {"id": testcase_id}).fetchone()
-    if not row:
+    testcase = crud.get_testcase(db, testcase_id=testcase_id)
+    if not testcase:
         raise HTTPException(status_code=404, detail="Test case not found")
-    return {"id": row.id, "test_case": row.test_case, "created_at": row.created_at, "updated_at": row.updated_at}
+    
+    # Security check: ensure test case belongs to the correct project
+    if testcase.project_id != project_id:
+        raise HTTPException(status_code=403, detail="Test case does not belong to this project")
+        
+    return testcase
 
 
-@app.post("/projects/{project_id}/testcases")
+@app.post("/projects/{project_id}/testcases", response_model=schemas.TestCaseOut)
 def save_testcase(
     project_id: int,
-    testcase: dict = Body(...),  # <--- tell FastAPI to parse JSON body
+    testcase: dict = Body(...),
     db: Session = Depends(get_db),
-    token: str = Depends(oauth2_scheme)
+    current_user: models.User = Depends(get_current_user)
 ):
-    current_user = get_current_user(token, db)
-
-    # Check if user is assigned to this project
     assigned = db.execute(
         text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
         {"pid": project_id, "uid": current_user.id}
@@ -290,24 +292,17 @@ def save_testcase(
     if not assigned:
         raise HTTPException(status_code=403, detail="You are not assigned to this project")
 
-    # Ensure table exists
-    crud.create_testcases_table(project_id, db)
+    db_testcase = crud.create_testcase(db, project_id=project_id, test_case_json=testcase)
+    return db_testcase
 
-    # Insert the test case JSON
-    crud.insert_testcase(project_id, testcase, db)
-
-    return {"status": "success", "message": "Test case saved"}
-
-@app.put("/projects/{project_id}/testcases/{testcase_id}")
+@app.put("/projects/{project_id}/testcases/{testcase_id}", response_model=schemas.TestCaseOut)
 def update_testcase(
     project_id: int,
     testcase_id: int,
     testcase: dict = Body(...),
     db: Session = Depends(get_db),
-    token: str = Depends(oauth2_scheme)
+    current_user: models.User = Depends(get_current_user)
 ):
-    current_user = get_current_user(token, db)
-
     assigned = db.execute(
         text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
         {"pid": project_id, "uid": current_user.id}
@@ -315,15 +310,14 @@ def update_testcase(
     if not assigned:
         raise HTTPException(status_code=403, detail="You are not assigned to this project")
 
-    table_name = f"testcases_project_{project_id}"
-    query = text(f"""
-        UPDATE {table_name}
-        SET test_case = :test_case, updated_at = now()
-        WHERE id = :id
-    """)
-    db.execute(query, {"test_case": json.dumps(testcase), "id": testcase_id})
-    db.commit()
-    return {"status": "success", "message": "Test case updated"}
+    db_testcase = crud.get_testcase(db, testcase_id)
+    if not db_testcase:
+        raise HTTPException(status_code=404, detail="Test case not found")
+    if db_testcase.project_id != project_id:
+        raise HTTPException(status_code=403, detail="Test case does not belong to this project")
+
+    updated_testcase = crud.update_testcase(db, testcase_id=testcase_id, test_case_json=testcase)
+    return updated_testcase
 
 
 @app.delete("/projects/{project_id}/testcases/{testcase_id}")
@@ -331,10 +325,8 @@ def delete_testcase(
     project_id: int,
     testcase_id: int,
     db: Session = Depends(get_db),
-    token: str = Depends(oauth2_scheme)
+    current_user: models.User = Depends(get_current_user)
 ):
-    current_user = get_current_user(token, db)
-
     assigned = db.execute(
         text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
         {"pid": project_id, "uid": current_user.id}
@@ -342,10 +334,13 @@ def delete_testcase(
     if not assigned:
         raise HTTPException(status_code=403, detail="You are not assigned to this project")
 
-    table_name = f"testcases_project_{project_id}"
-    query = text(f"DELETE FROM {table_name} WHERE id = :id")
-    db.execute(query, {"id": testcase_id})
-    db.commit()
+    db_testcase = crud.get_testcase(db, testcase_id)
+    if not db_testcase:
+        raise HTTPException(status_code=404, detail="Test case not found")
+    if db_testcase.project_id != project_id:
+        raise HTTPException(status_code=403, detail="Test case does not belong to this project")
+
+    crud.delete_testcase(db, testcase_id=testcase_id)
     return {"status": "success", "message": "Test case deleted"}
 
 
@@ -358,16 +353,17 @@ class DeployRequest(BaseModel):
     area_path: Optional[str] = None
     iteration_path: Optional[str] = None
 
-# ----------------- Deploy Endpoint -----------------
+# ----------------- Deploy Endpoint (REFACTORED) -----------------
 @app.post("/deploy_testcases")
 def deploy_testcases(req: DeployRequest, db: Session = Depends(get_db)):
-    # Get dynamic table model
-    TestCase = get_testcase_model(req.project_id)
-
+    
+    # --- THIS IS THE FIX ---
+    # Get test cases using the new CRUD function
     try:
-        testcases = db.query(TestCase).all()
+        testcases = crud.get_testcases_by_project(db, req.project_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch test cases: {str(e)}")
+    # --- END FIX ---
 
     if not testcases:
         raise HTTPException(status_code=404, detail="No test cases found for this project")
@@ -410,3 +406,27 @@ def deploy_testcases(req: DeployRequest, db: Session = Depends(get_db)):
             results.append({"id": test_case_title, "status": "failed", "detail": str(e)})
 
     return {"results": results}
+
+# ------------------ Chat History Routes (NEW) ------------------
+@app.put("/projects/{project_id}/chat_history", status_code=status.HTTP_200_OK)
+def update_chat_history(
+    project_id: int,
+    payload: schemas.ChatHistoryUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Check if user is assigned to this project
+    assigned = db.execute(
+        text("SELECT 1 FROM project_users WHERE project_id=:pid AND user_id=:uid"),
+        {"pid": project_id, "uid": current_user.id}
+    ).fetchone()
+    if not assigned:
+        raise HTTPException(status_code=403, detail="You are not assigned to this project")
+
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    project.chat_history = payload.history
+    db.commit()
+    return {"status": "success", "message": "Chat history updated"}

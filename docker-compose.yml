@@ -45,7 +45,7 @@ services:
       API_URL: http://web:8000
       GOOGLE_CLOUD_PROJECT: ai-project-467619
       VERTEX_LOCATION: us-central1
-      GOOGLE_API_KEY: AIzaSyBsd5BbSKn7DPBZ5qgEIA62Nk6OM1meI3U
+      GOOGLE_API_KEY: AIzaSyBoSNjMcsOoYdllVdCXEAGiYqyQ_zzbNjI
     depends_on:
       web:
         condition: service_started

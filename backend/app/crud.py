@@ -157,25 +157,54 @@ def update_project_file(db: Session, file_id: int, filename: str = None, filepat
     db.refresh(file)
     return file
 
-def create_testcases_table(project_id: int, db: Session):
-    table_name = f"testcases_project_{project_id}"
-    query = text(f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            id SERIAL PRIMARY KEY,
-            test_case JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT now(),
-            updated_at TIMESTAMP DEFAULT now()
-        );
-    """)
-    db.execute(query)
-    db.commit()
+def get_testcases_by_project(db: Session, project_id: int):
+    """
+    Get all test cases for a specific project.
+    """
+    return db.query(models.TestCase).filter(models.TestCase.project_id == project_id).all()
 
 
-def insert_testcase(project_id: int, test_case_json: dict, db: Session):
-    table_name = f"testcases_project_{project_id}"
-    query = text(f"""
-        INSERT INTO {table_name} (test_case, created_at, updated_at)
-        VALUES (:test_case, now(), now())
-    """)
-    db.execute(query, {"test_case": json.dumps(test_case_json)})
+def get_testcase(db: Session, testcase_id: int):
+    """
+    Get a single test case by its ID.
+    """
+    return db.query(models.TestCase).filter(models.TestCase.id == testcase_id).first()
+
+
+def create_testcase(db: Session, project_id: int, test_case_json: dict):
+    """
+    Create a new test case for a project.
+    """
+    db_testcase = models.TestCase(
+        project_id=project_id,
+        test_case=test_case_json
+    )
+    db.add(db_testcase)
     db.commit()
+    db.refresh(db_testcase)
+    return db_testcase
+
+
+def update_testcase(db: Session, testcase_id: int, test_case_json: dict):
+    """
+    Update an existing test case.
+    """
+    db_testcase = get_testcase(db, testcase_id)
+    if db_testcase:
+        db_testcase.test_case = test_case_json
+        db_testcase.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(db_testcase)
+    return db_testcase
+
+
+def delete_testcase(db: Session, testcase_id: int):
+    """
+    Delete a test case.
+    """
+    db_testcase = get_testcase(db, testcase_id)
+    if db_testcase:
+        db.delete(db_testcase)
+        db.commit()
+        return True
+    return False

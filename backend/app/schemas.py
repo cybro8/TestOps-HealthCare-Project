@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime  # NEW
 
 
@@ -40,7 +40,7 @@ class ProjectBase(BaseModel):
     area_path: Optional[str] = None
     api_version: str = "7.0"
     description: Optional[str] = None
-
+    chat_history: Optional[Any] = None
 
 class ProjectCreate(ProjectBase):
     pass
@@ -87,3 +87,18 @@ class ProjectFileOut(ProjectFileBase):
 # ------------------ Extended Project Schema with Files ------------------
 class ProjectWithFiles(ProjectOut):
     files: List[ProjectFileOut] = []
+
+class ChatHistoryUpdate(BaseModel):
+    history: List
+
+class TestCaseBase(BaseModel):
+    test_case: Dict
+
+class TestCaseOut(TestCaseBase):
+    id: int
+    project_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
