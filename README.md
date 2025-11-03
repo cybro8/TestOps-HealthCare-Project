@@ -18,7 +18,9 @@ This solution helps:
 - **AI & Automation**: Python, NLP libraries (planned), PyTest/Selenium (planned)  
 - **Deployment**: Docker, Docker Compose  
 - **CI/CD**: Extendable to Jenkins / GitHub Actions  
-
+---
+## Demo Link
+URL: http://136.116.82.75:8501/
 ---
 
 ## 🚀 Features
